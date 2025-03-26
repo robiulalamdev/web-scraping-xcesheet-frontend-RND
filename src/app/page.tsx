@@ -15,17 +15,15 @@ import * as XLSX from "xlsx";
 import { v4 as uuidv4 } from "uuid";
 import { motion, AnimatePresence } from "framer-motion";
 
-const API_URL = "http://localhost:9700";
-// const API_URL = "https://web-scraping-xcesheet-backend.onrender.com";
+const API_URL = process.env.NEXT_PUBLIC_BASE_URL;
 
 export default function ExcelFileManager() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [filePath, setFilePath] = useState<string | null>(null);
   const [data, setData] = useState<object[]>([]);
-  const [sheets, setSheets] = useState<object[]>([]);
+  // const [sheets, setSheets] = useState<object[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [uploadProgress, setUploadProgress] = useState(0);
   const [showDownloadPopup, setShowDownloadPopup] = useState(false);
   const [downloadFileName, setDownloadFileName] = useState("");
   const [connectionId, setConnectionId] = useState<string>("");
@@ -37,8 +35,6 @@ export default function ExcelFileManager() {
     if (event.target.files && event.target.files.length > 0) {
       setSelectedFile(event.target.files[0]);
       setError(null);
-      // Reset progress when a new file is selected
-      setUploadProgress(0);
     }
   };
 
@@ -86,15 +82,6 @@ export default function ExcelFileManager() {
 
     setIsUploading(true);
     setError(null);
-    setUploadProgress(0);
-
-    // Simulate progress during file reading
-    const progressInterval = setInterval(() => {
-      setUploadProgress((prev) => {
-        const newProgress = prev + Math.random() * 5;
-        return newProgress < 90 ? newProgress : 90;
-      });
-    }, 200);
 
     // need to convert selected file as array by xlsx
     const reader = new FileReader();
@@ -109,43 +96,30 @@ export default function ExcelFileManager() {
       const sheet = workbook.Sheets[sheetName];
       const extractData = await XLSX.utils.sheet_to_json(sheet);
 
-      if (extractData) {
-        await setSheets(() => [...(extractData as object[])]);
+      if (extractData?.length > 0) {
+        try {
+          await axios.post(
+            `${API_URL}/scrape`,
+            {
+              sheets: extractData,
+              connectionId: connectionId,
+            },
+            {
+              headers: { "Content-Type": "application/json" },
+            }
+          );
+        } catch (error) {
+          console.error("Upload failed:", error);
+          setError("Upload failed. Please try again.");
+        } finally {
+          setIsUploading(false);
+        }
+      } else {
+        setError("No data found in the selected file.");
+        setIsUploading(false);
+        return;
       }
     };
-
-    if (sheets.length === 0) {
-      setError("No data found in the selected file.");
-      setIsUploading(false);
-      clearInterval(progressInterval);
-      return;
-    }
-
-    try {
-      await axios.post(
-        `${API_URL}/scrape`,
-        {
-          sheets: sheets,
-          connectionId: connectionId,
-        },
-        {
-          headers: { "Content-Type": "application/json" },
-          onUploadProgress: (progressEvent) => {
-            const percentCompleted = Math.round(
-              (progressEvent.loaded * 100) / (progressEvent.total || 100)
-            );
-            setUploadProgress(90 + percentCompleted / 10); // Final 10% based on actual upload
-          },
-        }
-      );
-      setUploadProgress(100);
-    } catch (error) {
-      console.error("Upload failed:", error);
-      setError("Upload failed. Please try again.");
-    } finally {
-      clearInterval(progressInterval);
-      setIsUploading(false);
-    }
   };
 
   const handleDownload = () => {
@@ -284,18 +258,20 @@ export default function ExcelFileManager() {
               </button>
             </div>
 
-            {/* Upload Progress Bar */}
             {isUploading && (
               <div className="mt-4">
-                <div className="w-full bg-gray-700 rounded-full h-2.5">
-                  <div
-                    className="bg-emerald-500 h-2.5 rounded-full transition-all duration-300 ease-in-out"
-                    style={{ width: `${uploadProgress}%` }}
-                  ></div>
+                <div className="w-full bg-gray-700 rounded-full h-2.5 overflow-hidden">
+                  <motion.div
+                    className="bg-emerald-500 h-2.5 max-w-[75%] rounded-full"
+                    initial={{ x: "-100%" }}
+                    animate={{ x: "100%" }}
+                    transition={{
+                      repeat: Infinity,
+                      duration: 1.5,
+                      ease: "linear",
+                    }}
+                  />
                 </div>
-                <p className="text-xs text-gray-400 mt-1 text-right">
-                  {Math.round(uploadProgress)}% Complete
-                </p>
               </div>
             )}
 
@@ -363,7 +339,7 @@ export default function ExcelFileManager() {
               </p>
             </div>
             <div className="p-5">
-              <div className="overflow-x-auto">
+              <div className="overflow-y-scroll scroll_off">
                 <table className="w-full border-collapse">
                   <thead>
                     <tr className="bg-gray-800 text-left">

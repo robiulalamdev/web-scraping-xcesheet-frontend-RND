@@ -1,1 +1,19 @@
 @import "tailwindcss";
+
+.scroll_off::-webkit-scrollbar {
+  width: 0px !important;
+}
+
+.scroll_off::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 0px;
+}
+
+.scroll_off::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
+.scroll_off {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
