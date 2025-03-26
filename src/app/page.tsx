@@ -6,7 +6,6 @@ import axios from "axios";
 import {
   Upload,
   Download,
-  X,
   FileSpreadsheet,
   AlertCircle,
   Save,
@@ -19,7 +18,6 @@ const API_URL = process.env.NEXT_PUBLIC_BASE_URL;
 
 export default function ExcelFileManager() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [filePath, setFilePath] = useState<string | null>(null);
   const [data, setData] = useState<object[]>([]);
   // const [sheets, setSheets] = useState<object[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -35,6 +33,8 @@ export default function ExcelFileManager() {
     if (event.target.files && event.target.files.length > 0) {
       setSelectedFile(event.target.files[0]);
       setError(null);
+      setIsUploading(false);
+      setData([]);
     }
   };
 
@@ -45,34 +45,41 @@ export default function ExcelFileManager() {
 
       if (uui) {
         setConnectionId(uui);
-        const source = new EventSource(`${API_URL}/sse-connect/${uui}`);
-        source.onopen = () => {
-          console.log("Connected to server");
-        };
-        source.onerror = (error) => {
-          console.error("Error connecting to server:", error);
-          setError("Error connecting to server. Please try again.");
-        };
-        source.onmessage = (event) => {
-          const newData = JSON.parse(event.data);
-          const row = newData?.row;
-          if (row) {
-            setData((prevData) => [...prevData, row]);
-          }
-          if (newData?.success === true) {
-            if (newData?.data) {
-              setData(newData?.data);
-              initialDataAnimated.current = false; // Reset animation flag for new data
-            }
-            source.close();
-          }
-        };
+        // const source = new EventSource(`${API_URL}/sse-connect/${uui}`);
+        // source.onopen = () => {
+        //   console.log("Connected to server");
+        // };
+        // source.onerror = (error) => {
+        //   console.error("Error connecting to server:", error);
+        //   setError("Error connecting to server. Please try again.");
+        // };
+        // source.onmessage = (event) => {
+        //   const newData = JSON.parse(event.data);
+        //   const row = newData?.row;
+        //   if (row) {
+        //     setData((prevData) => [...prevData, row]);
+        //   }
+        //   if (newData?.success === true) {
+        //     if (newData?.data) {
+        //       setData(newData?.data);
+        //       initialDataAnimated.current = false; // Reset animation flag for new data
+        //     }
+        //     source.close();
+        //   }
+        // };
       }
     } catch (error) {
       console.error("Error connecting to server:", error);
       setError("Error connecting to server. Please try again.");
     }
   };
+
+  //** simplified two */
+  function chunkArray(array: object[], size: number) {
+    return Array.from({ length: Math.ceil(array.length / size) }, (_, i) =>
+      array.slice(i * size, i * size + size)
+    );
+  }
 
   const handleUpload = async () => {
     if (!selectedFile) {
@@ -83,7 +90,7 @@ export default function ExcelFileManager() {
     setIsUploading(true);
     setError(null);
 
-    // need to convert selected file as array by xlsx
+    // Convert file to JSON using xlsx
     const reader = new FileReader();
     reader.readAsBinaryString(selectedFile);
 
@@ -92,62 +99,130 @@ export default function ExcelFileManager() {
 
       const binaryStr = e.target.result as string;
       const workbook = XLSX.read(binaryStr, { type: "binary" });
-      const sheetName = workbook.SheetNames[0]; // Read the first sheet
+      const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
-      const extractData = await XLSX.utils.sheet_to_json(sheet);
+      const extractData = (await XLSX.utils.sheet_to_json(sheet)) as object[];
 
-      if (extractData?.length > 0) {
-        try {
-          const response = await axios.post(
-            `${API_URL}/scrape`,
-            {
-              sheets: extractData,
-              connectionId: connectionId,
-            },
-            {
-              headers: { "Content-Type": "application/json" },
-            }
-          );
-
-          if (response?.data && response?.data?.success === true) {
-            if (response?.data?.data?.length > 0) {
-              setData(response?.data?.data);
-            }
-          }
-        } catch (error) {
-          console.error("Upload failed:", error);
-          setError("Upload failed. Please try again.");
-        } finally {
-          setIsUploading(false);
-        }
-      } else {
+      if (!extractData?.length) {
         setError("No data found in the selected file.");
         setIsUploading(false);
         return;
       }
+
+      const chunks = chunkArray(extractData, 5); // Split data into chunks of 5
+
+      let lastPromise = Promise.resolve(); // Ensures order of setting data
+
+      try {
+        for (let i = 0; i < chunks.length; i += 2) {
+          const chunk1 = chunks[i];
+          const chunk2 = chunks[i + 1] || null; // Second chunk might not exist
+
+          // Run both API calls in parallel
+          const promise1 = axios.post(
+            `${API_URL}/scrape`,
+            { sheets: chunk1, connectionId },
+            { headers: { "Content-Type": "application/json" }, timeout: 150000 }
+          );
+          const promise2 = chunk2
+            ? axios.post(
+                `${API_URL}/scrape`,
+                { sheets: chunk2, connectionId },
+                {
+                  headers: { "Content-Type": "application/json" },
+                  timeout: 150000,
+                }
+              )
+            : null;
+
+          // Store responses to ensure correct order
+          const response1 = promise1.then((res) =>
+            res?.data?.success ? res.data.data : []
+          );
+          const response2 = promise2
+            ? promise2.then((res) => (res?.data?.success ? res.data.data : []))
+            : Promise.resolve([]);
+
+          // Wait for first response, then immediately set data
+          lastPromise = lastPromise.then(async () => {
+            const firstData = await response1;
+            if (firstData.length) {
+              setData((prevData) => [...prevData, ...firstData]);
+            }
+
+            // Now wait for second response
+            const secondData = await response2;
+            if (secondData.length) {
+              setData((prevData) => [...prevData, ...secondData]);
+            }
+          });
+
+          // Ensure this batch finishes before moving to the next one
+          await lastPromise;
+        }
+      } catch (error) {
+        console.error("Upload failed:", error);
+        setError("Upload failed. Please try again.");
+      } finally {
+        setIsUploading(false);
+      }
     };
   };
 
-  const handleDownload = () => {
-    if (!filePath) return;
-    const fileName = filePath.split("/").pop();
-    window.open(`${API_URL}/download/${fileName}`);
-  };
+  //*** MAIN CODE */
+  // const handleUpload = async () => {
+  //   if (!selectedFile) {
+  //     setError("Please select a file first!");
+  //     return;
+  //   }
 
-  const handleDelete = async () => {
-    if (!filePath) return;
-    const fileName = filePath.split("/").pop();
+  //   setIsUploading(true);
+  //   setError(null);
 
-    try {
-      await axios.delete(`${API_URL}/delete/${fileName}`);
-      setFilePath(null);
-      setData([]);
-      setSelectedFile(null);
-    } catch (error) {
-      console.error("Delete failed:", error);
-      setError("Delete failed. Please try again.");
-    }
-  };
+  //   // need to convert selected file as array by xlsx
+  //   const reader = new FileReader();
+  //   reader.readAsBinaryString(selectedFile);
+
+  //   reader.onload = async (e) => {
+  //     if (!e.target?.result) return;
+
+  //     const binaryStr = e.target.result as string;
+  //     const workbook = XLSX.read(binaryStr, { type: "binary" });
+  //     const sheetName = workbook.SheetNames[0]; // Read the first sheet
+  //     const sheet = workbook.Sheets[sheetName];
+  //     const extractData = await XLSX.utils.sheet_to_json(sheet);
+
+  //     if (extractData?.length > 0) {
+  //       try {
+  //         const response = await axios.post(
+  //           `${API_URL}/scrape`,
+  //           {
+  //             sheets: extractData,
+  //             connectionId: connectionId,
+  //           },
+  //           {
+  //             headers: { "Content-Type": "application/json" },
+  //           }
+  //         );
+
+  //         if (response?.data && response?.data?.success === true) {
+  //           if (response?.data?.data?.length > 0) {
+  //             setData(response?.data?.data);
+  //           }
+  //         }
+  //       } catch (error) {
+  //         console.error("Upload failed:", error);
+  //         setError("Upload failed. Please try again.");
+  //       } finally {
+  //         setIsUploading(false);
+  //       }
+  //     } else {
+  //       setError("No data found in the selected file.");
+  //       setIsUploading(false);
+  //       return;
+  //     }
+  //   };
+  // };
 
   const handleExportToExcel = () => {
     if (data.length === 0) {
@@ -291,7 +366,7 @@ export default function ExcelFileManager() {
         </div>
 
         {/* File Actions Card */}
-        {(filePath || data.length > 0) && (
+        {data.length > 0 && (
           <div className="bg-gray-900 border border-gray-800 rounded-lg shadow-lg mb-8">
             <div className="p-5 border-b border-gray-800">
               <h2 className="text-xl font-semibold text-white">File Actions</h2>
@@ -300,16 +375,6 @@ export default function ExcelFileManager() {
               </p>
             </div>
             <div className="p-5 flex flex-wrap gap-4">
-              {filePath && (
-                <button
-                  onClick={handleDownload}
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-md font-medium flex items-center justify-center gap-2 transition-colors min-w-[180px]"
-                >
-                  <Download className="h-4 w-4" />
-                  Download Updated File
-                </button>
-              )}
-
               {data.length > 0 && (
                 <button
                   onClick={handleExportToExcel}
@@ -317,16 +382,6 @@ export default function ExcelFileManager() {
                 >
                   <Save className="h-4 w-4" />
                   Export to Excel
-                </button>
-              )}
-
-              {filePath && (
-                <button
-                  onClick={handleDelete}
-                  className="flex-1 bg-red-700 hover:bg-red-800 text-white px-4 py-2 rounded-md font-medium flex items-center justify-center gap-2 transition-colors min-w-[180px]"
-                >
-                  <X className="h-4 w-4" />
-                  Cancel & Delete
                 </button>
               )}
             </div>
