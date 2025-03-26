@@ -75,6 +75,101 @@ export default function ExcelFileManager() {
   };
 
   //** simplified two */
+  // function chunkArray(array: object[], size: number) {
+  //   return Array.from({ length: Math.ceil(array.length / size) }, (_, i) =>
+  //     array.slice(i * size, i * size + size)
+  //   );
+  // }
+
+  // const handleUpload = async () => {
+  //   if (!selectedFile) {
+  //     setError("Please select a file first!");
+  //     return;
+  //   }
+
+  //   setIsUploading(true);
+  //   setError(null);
+
+  //   // Convert file to JSON using xlsx
+  //   const reader = new FileReader();
+  //   reader.readAsBinaryString(selectedFile);
+
+  //   reader.onload = async (e) => {
+  //     if (!e.target?.result) return;
+
+  //     const binaryStr = e.target.result as string;
+  //     const workbook = XLSX.read(binaryStr, { type: "binary" });
+  //     const sheetName = workbook.SheetNames[0];
+  //     const sheet = workbook.Sheets[sheetName];
+  //     const extractData = (await XLSX.utils.sheet_to_json(sheet)) as object[];
+
+  //     if (!extractData?.length) {
+  //       setError("No data found in the selected file.");
+  //       setIsUploading(false);
+  //       return;
+  //     }
+
+  //     const chunks = chunkArray(extractData, 5); // Split data into chunks of 5
+
+  //     let lastPromise = Promise.resolve(); // Ensures order of setting data
+
+  //     try {
+  //       for (let i = 0; i < chunks.length; i += 2) {
+  //         const chunk1 = chunks[i];
+  //         const chunk2 = chunks[i + 1] || null; // Second chunk might not exist
+
+  //         // Run both API calls in parallel
+  //         const promise1 = axios.post(
+  //           `${API_URL}/scrape`,
+  //           { sheets: chunk1, connectionId },
+  //           { headers: { "Content-Type": "application/json" }, timeout: 150000 }
+  //         );
+  //         const promise2 = chunk2
+  //           ? axios.post(
+  //               `${API_URL}/scrape`,
+  //               { sheets: chunk2, connectionId },
+  //               {
+  //                 headers: { "Content-Type": "application/json" },
+  //                 timeout: 150000,
+  //               }
+  //             )
+  //           : null;
+
+  //         // Store responses to ensure correct order
+  //         const response1 = promise1.then((res) =>
+  //           res?.data?.success ? res.data.data : []
+  //         );
+  //         const response2 = promise2
+  //           ? promise2.then((res) => (res?.data?.success ? res.data.data : []))
+  //           : Promise.resolve([]);
+
+  //         // Wait for first response, then immediately set data
+  //         lastPromise = lastPromise.then(async () => {
+  //           const firstData = await response1;
+  //           if (firstData.length) {
+  //             setData((prevData) => [...prevData, ...firstData]);
+  //           }
+
+  //           // Now wait for second response
+  //           const secondData = await response2;
+  //           if (secondData.length) {
+  //             setData((prevData) => [...prevData, ...secondData]);
+  //           }
+  //         });
+
+  //         // Ensure this batch finishes before moving to the next one
+  //         await lastPromise;
+  //       }
+  //     } catch (error) {
+  //       console.error("Upload failed:", error);
+  //       setError("Upload failed. Please try again.");
+  //     } finally {
+  //       setIsUploading(false);
+  //     }
+  //   };
+  // };
+
+  //* FIRST WAY
   function chunkArray(array: object[], size: number) {
     return Array.from({ length: Math.ceil(array.length / size) }, (_, i) =>
       array.slice(i * size, i * size + size)
@@ -90,7 +185,7 @@ export default function ExcelFileManager() {
     setIsUploading(true);
     setError(null);
 
-    // Convert file to JSON using xlsx
+    // need to convert selected file as array by xlsx
     const reader = new FileReader();
     reader.readAsBinaryString(selectedFile);
 
@@ -99,72 +194,47 @@ export default function ExcelFileManager() {
 
       const binaryStr = e.target.result as string;
       const workbook = XLSX.read(binaryStr, { type: "binary" });
-      const sheetName = workbook.SheetNames[0];
+      const sheetName = workbook.SheetNames[0]; // Read the first sheet
       const sheet = workbook.Sheets[sheetName];
       const extractData = (await XLSX.utils.sheet_to_json(sheet)) as object[];
 
-      if (!extractData?.length) {
+      if (extractData?.length > 0) {
+        const chunks = chunkArray(extractData, 5);
+        console.log(chunks);
+
+        try {
+          for (const chunk of chunks) {
+            const response = await axios.post(
+              `${API_URL}/scrape`,
+              {
+                sheets: chunk,
+                connectionId: connectionId,
+              },
+              {
+                headers: { "Content-Type": "application/json" },
+                timeout: 150000,
+              }
+            );
+
+            if (response?.data && response?.data?.success === true) {
+              if (response?.data?.data?.length > 0) {
+                setData([...data, ...response?.data?.data]);
+              }
+            }
+            setTimeout(() => {
+              console.log("✅ Data chunk processed successfully");
+            }, 1200);
+          }
+        } catch (error) {
+          console.error("Upload failed:", error);
+          setError("Upload failed. Please try again.");
+        } finally {
+          setIsUploading(false);
+        }
+      } else {
         setError("No data found in the selected file.");
         setIsUploading(false);
         return;
-      }
-
-      const chunks = chunkArray(extractData, 5); // Split data into chunks of 5
-
-      let lastPromise = Promise.resolve(); // Ensures order of setting data
-
-      try {
-        for (let i = 0; i < chunks.length; i += 2) {
-          const chunk1 = chunks[i];
-          const chunk2 = chunks[i + 1] || null; // Second chunk might not exist
-
-          // Run both API calls in parallel
-          const promise1 = axios.post(
-            `${API_URL}/scrape`,
-            { sheets: chunk1, connectionId },
-            { headers: { "Content-Type": "application/json" }, timeout: 150000 }
-          );
-          const promise2 = chunk2
-            ? axios.post(
-                `${API_URL}/scrape`,
-                { sheets: chunk2, connectionId },
-                {
-                  headers: { "Content-Type": "application/json" },
-                  timeout: 150000,
-                }
-              )
-            : null;
-
-          // Store responses to ensure correct order
-          const response1 = promise1.then((res) =>
-            res?.data?.success ? res.data.data : []
-          );
-          const response2 = promise2
-            ? promise2.then((res) => (res?.data?.success ? res.data.data : []))
-            : Promise.resolve([]);
-
-          // Wait for first response, then immediately set data
-          lastPromise = lastPromise.then(async () => {
-            const firstData = await response1;
-            if (firstData.length) {
-              setData((prevData) => [...prevData, ...firstData]);
-            }
-
-            // Now wait for second response
-            const secondData = await response2;
-            if (secondData.length) {
-              setData((prevData) => [...prevData, ...secondData]);
-            }
-          });
-
-          // Ensure this batch finishes before moving to the next one
-          await lastPromise;
-        }
-      } catch (error) {
-        console.error("Upload failed:", error);
-        setError("Upload failed. Please try again.");
-      } finally {
-        setIsUploading(false);
       }
     };
   };
