@@ -98,7 +98,7 @@ export default function ExcelFileManager() {
 
       if (extractData?.length > 0) {
         try {
-          await axios.post(
+          const response = await axios.post(
             `${API_URL}/scrape`,
             {
               sheets: extractData,
@@ -108,6 +108,12 @@ export default function ExcelFileManager() {
               headers: { "Content-Type": "application/json" },
             }
           );
+
+          if (response?.data && response?.data?.success === true) {
+            if (response?.data?.data?.length > 0) {
+              setData(response?.data?.data);
+            }
+          }
         } catch (error) {
           console.error("Upload failed:", error);
           setError("Upload failed. Please try again.");
