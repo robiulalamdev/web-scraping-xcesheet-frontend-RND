@@ -200,7 +200,6 @@ export default function ExcelFileManager() {
 
       if (extractData?.length > 0) {
         const chunks = chunkArray(extractData, 5);
-        console.log(chunks);
 
         try {
           for (const chunk of chunks) {
@@ -218,12 +217,9 @@ export default function ExcelFileManager() {
 
             if (response?.data && response?.data?.success === true) {
               if (response?.data?.data?.length > 0) {
-                setData([...data, ...response?.data?.data]);
+                setData((prevData) => [...prevData, ...response?.data?.data]);
               }
             }
-            setTimeout(() => {
-              console.log("✅ Data chunk processed successfully");
-            }, 1200);
           }
         } catch (error) {
           console.error("Upload failed:", error);
