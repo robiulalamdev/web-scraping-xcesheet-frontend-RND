@@ -2,7 +2,7 @@
 
 import type React from "react";
 import { useEffect, useState, useRef } from "react";
-import axios from "axios";
+import axios, { CancelTokenSource } from "axios";
 import {
   Upload,
   Download,
@@ -24,6 +24,13 @@ import { motion, AnimatePresence } from "framer-motion";
 // Make sure this is correctly set in your environment variables
 const API_URL = process.env.NEXT_PUBLIC_BASE_URL || "";
 
+// First, let's define a custom error type interface
+interface ApiError {
+  message: string;
+  code?: string;
+  status?: number;
+}
+
 export default function ExcelFileManager() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [data, setData] = useState<object[]>([]);
@@ -44,11 +51,10 @@ export default function ExcelFileManager() {
   );
   const [totalItems, setTotalItems] = useState(0);
   const [processedItems, setProcessedItems] = useState(0);
-  const [buttonHover, setButtonHover] = useState(false);
 
   // Ref to track if we've animated the initial data load
   const initialDataAnimated = useRef(false);
-  const uploadCancelTokenRef = useRef<any>(null);
+  const uploadCancelTokenRef = useRef<CancelTokenSource | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -79,13 +85,13 @@ export default function ExcelFileManager() {
     }
   };
 
-  function chunkArray(array: object[], size: number) {
-    return Array.from({ length: Math.ceil(array.length / size) }, (_, i) =>
-      array.slice(i * size, i * size + size)
-    );
-  }
+  // function chunkArray(array: object[], size: number) {
+  //   return Array.from({ length: Math.ceil(array.length / size) }, (_, i) =>
+  //     array.slice(i * size, i * size + size)
+  //   );
+  // }
 
-  const validateExcelData = (data: any[]): boolean => {
+  const validateExcelData = (data: Record<string, unknown>[]): boolean => {
     // Check if "Part" column exists in the data
     if (data.length === 0) return false;
 
@@ -104,7 +110,11 @@ export default function ExcelFileManager() {
   };
 
   // Process data locally without API
-  const processDataLocally = (extractData: any[]) => {
+  interface ExcelRow {
+    [key: string]: string | number | boolean | null;
+  }
+
+  const processDataLocally = (extractData: ExcelRow[]) => {
     setIsUploading(true);
     setTotalItems(extractData.length);
     setProcessedItems(0);
@@ -170,7 +180,7 @@ export default function ExcelFileManager() {
         }
 
         // Validate that the data has a "Part" column
-        if (!validateExcelData(extractData)) {
+        if (!validateExcelData(extractData as Record<string, unknown>[])) {
           setIsUploading(false);
           return;
         }
@@ -182,7 +192,7 @@ export default function ExcelFileManager() {
         // Check if we should use offline mode
         if (isOfflineMode || !API_URL) {
           console.log("Using offline mode for processing");
-          processDataLocally(extractData);
+          processDataLocally(extractData as ExcelRow[]);
           return;
         }
 
@@ -219,12 +229,13 @@ export default function ExcelFileManager() {
               // If response is not successful, use the original item
               processedData.push(extractData[i]);
             }
-          } catch (error: any) {
-            if (axios.isCancel(error)) {
-              console.log("Request canceled:", error.message);
+          } catch (err) {
+            if (axios.isCancel(err)) {
+              console.log("Request canceled:", err.message);
               setError("Upload canceled.");
               break;
             } else {
+              const error = err as Error | ApiError;
               console.error("API request failed:", error);
 
               // If we encounter a network error, switch to offline mode
@@ -234,7 +245,7 @@ export default function ExcelFileManager() {
 
                 // Process the remaining data locally
                 const remainingData = extractData.slice(i);
-                processDataLocally(remainingData);
+                processDataLocally(remainingData as ExcelRow[]);
                 break;
               } else {
                 // Continue with the original item on error
@@ -254,7 +265,8 @@ export default function ExcelFileManager() {
 
         setData(processedData);
         setIsUploading(false);
-      } catch (error: any) {
+      } catch (err) {
+        const error = err as Error;
         console.error("Error processing file:", error);
         setError(`Error processing file: ${error.message || "Unknown error"}`);
         setIsUploading(false);
@@ -333,7 +345,8 @@ export default function ExcelFileManager() {
           setDownloadProgress(0);
         }, 1000);
       }, 1500);
-    } catch (error: any) {
+    } catch (err) {
+      const error = err as Error;
       console.error("Error exporting file:", error);
       setError(`Error exporting file: ${error.message || "Unknown error"}`);
       setIsDownloading(false);
@@ -453,8 +466,6 @@ export default function ExcelFileManager() {
                 <motion.button
                   onClick={handleUpload}
                   disabled={!selectedFile || isUploading}
-                  onMouseEnter={() => setButtonHover(true)}
-                  onMouseLeave={() => setButtonHover(false)}
                   whileHover={{ scale: 1.03 }}
                   whileTap={{ scale: 0.97 }}
                   className={`px-4 py-3 rounded-md font-medium flex items-center justify-center gap-2
